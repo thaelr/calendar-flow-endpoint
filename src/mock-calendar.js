@@ -384,7 +384,13 @@ async function insertCalendarEvent(event) {
     throw new Error(`Google events.insert failed: ${response.status} ${text}`);
   }
 
-  return response.json();
+  const payload = await response.json();
+  console.log('[calendar] event created', {
+    calendarId: config.googleCalendarId,
+    eventId: payload?.id ?? null,
+    htmlLink: payload?.htmlLink ?? null,
+  });
+  return payload;
 }
 
 function slotIsFree(slotStart, slotEnd, busyIntervals) {
@@ -542,12 +548,14 @@ export function buildSummaryPayload(payload) {
 export async function confirmConsultationBooking(payload, flowToken) {
   const parsedDate = parseYmd(payload.date);
   if (!parsedDate) {
+    console.error('[calendar] booking failed: invalid date', payload.date);
     return {
       status: 'invalid_date',
     };
   }
 
   if (!hasGoogleCalendarConfig()) {
+    console.error('[calendar] booking failed: google calendar not configured');
     return {
       status: 'google_not_configured',
     };
@@ -557,6 +565,10 @@ export async function confirmConsultationBooking(payload, flowToken) {
   const busyIntervals = await fetchBusyIntervals(slot.start.toISOString(), slot.end.toISOString());
 
   if (!slotIsFree(slot.start.getTime(), slot.end.getTime(), busyIntervals)) {
+    console.warn('[calendar] slot unavailable at confirmation', {
+      date: payload.date,
+      time: payload.time,
+    });
     return {
       status: 'slot_unavailable',
       refreshedScreen: await buildAppointmentScreen({

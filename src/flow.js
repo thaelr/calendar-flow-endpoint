@@ -93,6 +93,14 @@ export async function getNextScreen(payload) {
 
   if (screen === 'SUMMARY' && action === 'data_exchange') {
     const bookingResult = await confirmConsultationBooking(data, flowToken);
+    console.log('[flow] booking result', {
+      status: bookingResult.status,
+      eventId: bookingResult.eventId || null,
+      date: data.date || null,
+      time: data.time || null,
+      email: data.email || null,
+      phone: data.phone || null,
+    });
 
     if (bookingResult.status === 'slot_unavailable' && bookingResult.refreshedScreen) {
       return bookingResult.refreshedScreen;
