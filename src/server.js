@@ -4,6 +4,7 @@ import express from 'express';
 import { config, hasEncryptionConfig, hasGoogleCalendarConfig } from './config.js';
 import { decryptRequest, encryptResponse } from './encryption.js';
 import { getNextScreen } from './flow.js';
+import { confirmConsultationBooking } from './mock-calendar.js';
 
 class FlowEndpointError extends Error {
   constructor(statusCode, message) {
@@ -67,6 +68,19 @@ app.get('/health', (_req, res) => {
     encryption_ready: hasEncryptionConfig(),
     google_calendar_ready: hasGoogleCalendarConfig(),
   });
+});
+
+app.post('/debug/book-test', async (req, res, next) => {
+  try {
+    const payload = req.body ?? {};
+    const result = await confirmConsultationBooking(payload, payload.flow_token ?? 'debug-flow-token');
+    res.json({
+      ok: true,
+      result,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post(config.endpointPath, async (req, res, next) => {
