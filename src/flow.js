@@ -1,4 +1,8 @@
-import { buildAppointmentScreen, buildSummaryPayload } from './mock-calendar.js';
+import {
+  buildAppointmentScreen,
+  buildSummaryPayload,
+  confirmConsultationBooking,
+} from './mock-calendar.js';
 
 function buildDetailsScreen(data = {}) {
   return {
@@ -12,7 +16,7 @@ function buildDetailsScreen(data = {}) {
   };
 }
 
-function buildExtensionMessageResponse(flowToken, data = {}) {
+function buildExtensionMessageResponse(flowToken, data = {}, bookingResult = {}) {
   return {
     screen: 'SUCCESS',
     data: {
@@ -28,6 +32,8 @@ function buildExtensionMessageResponse(flowToken, data = {}) {
           email: data.email,
           phone: data.phone,
           more_details: data.more_details || '',
+          booking_status: bookingResult.status || 'unknown',
+          google_event_id: bookingResult.eventId || '',
         },
       },
     },
@@ -86,7 +92,13 @@ export async function getNextScreen(payload) {
   }
 
   if (screen === 'SUMMARY' && action === 'data_exchange') {
-    return buildExtensionMessageResponse(flowToken, data);
+    const bookingResult = await confirmConsultationBooking(data, flowToken);
+
+    if (bookingResult.status === 'slot_unavailable' && bookingResult.refreshedScreen) {
+      return bookingResult.refreshedScreen;
+    }
+
+    return buildExtensionMessageResponse(flowToken, data, bookingResult);
   }
 
   return {

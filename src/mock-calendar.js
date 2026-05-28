@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { config, hasGoogleCalendarConfig } from './config.js';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
 
 const tokenCache = {
   accessToken: null,
@@ -98,6 +98,16 @@ function dateTitle(parts, timeZone) {
     day: 'numeric',
     month: 'long',
   }).format(date);
+}
+
+function timeRangeTitle(parts, timeLabel) {
+  const bounds = slotBounds(parts, timeLabel);
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: config.calendarTimezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(bounds.start);
 }
 
 function absoluteDay(parts) {
@@ -358,6 +368,25 @@ async function fetchBusyIntervals(timeMin, timeMax) {
   }));
 }
 
+async function insertCalendarEvent(event) {
+  const accessToken = await getGoogleAccessToken();
+  const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.googleCalendarId)}/events`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(event),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Google events.insert failed: ${response.status} ${text}`);
+  }
+
+  return response.json();
+}
+
 function slotIsFree(slotStart, slotEnd, busyIntervals) {
   return !busyIntervals.some((busy) => busy.start < slotEnd && busy.end > slotStart);
 }
@@ -507,5 +536,68 @@ export function buildSummaryPayload(payload) {
       phone: payload.phone || '',
       more_details: payload.more_details || '',
     },
+  };
+}
+
+export async function confirmConsultationBooking(payload, flowToken) {
+  const parsedDate = parseYmd(payload.date);
+  if (!parsedDate) {
+    return {
+      status: 'invalid_date',
+    };
+  }
+
+  if (!hasGoogleCalendarConfig()) {
+    return {
+      status: 'google_not_configured',
+    };
+  }
+
+  const slot = slotBounds(parsedDate, payload.time);
+  const busyIntervals = await fetchBusyIntervals(slot.start.toISOString(), slot.end.toISOString());
+
+  if (!slotIsFree(slot.start.getTime(), slot.end.getTime(), busyIntervals)) {
+    return {
+      status: 'slot_unavailable',
+      refreshedScreen: await buildAppointmentScreen({
+        selectedMonth: payload.month,
+        selectedDate: payload.date,
+      }),
+    };
+  }
+
+  const dateLabel = dateTitle(parsedDate, config.calendarTimezone);
+  const timeLabel = timeRangeTitle(parsedDate, payload.time);
+  const summary = `Consultation - ${payload.name || 'Client'} - WhatsApp`;
+  const description = [
+    'Source: WhatsApp Flow',
+    `Flow token: ${flowToken || ''}`,
+    `Name: ${payload.name || ''}`,
+    `Email: ${payload.email || ''}`,
+    `Phone: ${payload.phone || ''}`,
+    `Date: ${dateLabel}`,
+    `Time: ${timeLabel}`,
+    '',
+    payload.more_details || 'No additional details.',
+  ].join('\n');
+
+  const event = await insertCalendarEvent({
+    summary,
+    description,
+    start: {
+      dateTime: slot.start.toISOString(),
+      timeZone: config.calendarTimezone,
+    },
+    end: {
+      dateTime: slot.end.toISOString(),
+      timeZone: config.calendarTimezone,
+    },
+    visibility: 'private',
+  });
+
+  return {
+    status: 'booked',
+    eventId: event.id || null,
+    eventLink: event.htmlLink || null,
   };
 }
