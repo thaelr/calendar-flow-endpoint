@@ -1,4 +1,13 @@
-import { config } from './config.js';
+import crypto from 'crypto';
+import { config, hasGoogleCalendarConfig } from './config.js';
+
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+
+const tokenCache = {
+  accessToken: null,
+  expiresAt: 0,
+};
 
 function pad(value) {
   return String(value).padStart(2, '0');
@@ -42,6 +51,16 @@ function addDays(parts, offset) {
     year: date.getUTCFullYear(),
     month: date.getUTCMonth() + 1,
     day: date.getUTCDate(),
+  };
+}
+
+function addMonths(parts, offset) {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, 1, 12));
+  date.setUTCMonth(date.getUTCMonth() + offset);
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: 1,
   };
 }
 
@@ -97,10 +116,6 @@ function isConsultationDay(parts) {
   return weekday >= 1 && weekday <= 5;
 }
 
-function slotSeed(parts, slotIndex) {
-  return (parts.year * 10000) + (parts.month * 100) + parts.day + slotIndex;
-}
-
 function buildMonthOption(year, month) {
   return {
     id: `${year}-${pad(month)}`,
@@ -108,8 +123,7 @@ function buildMonthOption(year, month) {
   };
 }
 
-function buildDateOption(parts) {
-  const enabled = isInsideBookingWindow(parts) && isConsultationDay(parts);
+function buildDateOption(parts, enabled) {
   return {
     id: formatYmd(parts),
     title: dateTitle(parts, config.calendarTimezone),
@@ -118,27 +132,32 @@ function buildDateOption(parts) {
 }
 
 function baseTimeSlots() {
-  const items = [];
-  for (let hour = 12; hour <= 17; hour += 1) {
-    items.push(`${pad(hour)}:00`);
-    items.push(`${pad(hour)}:30`);
+  const result = [];
+  const startMinutes = config.workdayStartHour * 60;
+  const endMinutes = config.workdayEndHour * 60;
+  const duration = config.consultationDurationMinutes;
+  const step = config.slotIntervalMinutes;
+
+  for (let minute = startMinutes; minute + duration <= endMinutes; minute += step) {
+    const hours = Math.floor(minute / 60);
+    const mins = minute % 60;
+    result.push(`${pad(hours)}:${pad(mins)}`);
   }
-  return items;
+
+  return result;
 }
 
-function buildTimeOptions(dateId) {
-  const parts = parseYmd(dateId);
-  if (!parts) return [];
+function slotSeed(parts, slotIndex) {
+  return (parts.year * 10000) + (parts.month * 100) + parts.day + slotIndex;
+}
 
+function mockTimeOptionsForDate(parts) {
   const openDay = isInsideBookingWindow(parts) && isConsultationDay(parts);
-  const rawSlots = baseTimeSlots().map((time, index) => {
-    const busy = slotSeed(parts, index) % 4 === 0;
-    return {
-      id: time,
-      title: time,
-      enabled: openDay && !busy,
-    };
-  });
+  const rawSlots = baseTimeSlots().map((time, index) => ({
+    id: time,
+    title: time,
+    enabled: openDay && (slotSeed(parts, index) % 4 !== 0),
+  }));
 
   if (openDay && !rawSlots.some((slot) => slot.enabled)) {
     return rawSlots.map((slot, index) => ({
@@ -148,6 +167,257 @@ function buildTimeOptions(dateId) {
   }
 
   return rawSlots;
+}
+
+function buildMockDateOptions(monthId) {
+  const month = parseMonthId(monthId);
+  if (!month) return [];
+
+  const result = [];
+  const totalDays = daysInMonth(month.year, month.month);
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    const parts = { year: month.year, month: month.month, day };
+    const enabled = isInsideBookingWindow(parts) && isConsultationDay(parts);
+    result.push(buildDateOption(parts, enabled));
+  }
+
+  return result;
+}
+
+function buildMockTimeOptions(dateId) {
+  const parts = parseYmd(dateId);
+  if (!parts) return [];
+  return mockTimeOptionsForDate(parts);
+}
+
+function base64UrlEncode(value) {
+  return Buffer.from(value)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function createServiceAccountAssertion() {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = issuedAt + 3600;
+
+  const header = {
+    alg: 'RS256',
+    typ: 'JWT',
+  };
+
+  const payload = {
+    iss: config.googleClientEmail,
+    scope: GOOGLE_CALENDAR_SCOPE,
+    aud: GOOGLE_TOKEN_URL,
+    exp: expiresAt,
+    iat: issuedAt,
+  };
+
+  const encodedHeader = base64UrlEncode(JSON.stringify(header));
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const unsignedToken = `${encodedHeader}.${encodedPayload}`;
+
+  const signature = crypto
+    .createSign('RSA-SHA256')
+    .update(unsignedToken)
+    .sign(config.googlePrivateKey, 'base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+
+  return `${unsignedToken}.${signature}`;
+}
+
+async function getGoogleAccessToken() {
+  const now = Date.now();
+  if (tokenCache.accessToken && tokenCache.expiresAt > now + 60000) {
+    return tokenCache.accessToken;
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    assertion: createServiceAccountAssertion(),
+  });
+
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Google token request failed: ${response.status} ${text}`);
+  }
+
+  const payload = await response.json();
+  tokenCache.accessToken = payload.access_token;
+  tokenCache.expiresAt = now + (Number(payload.expires_in || 3600) * 1000);
+  return tokenCache.accessToken;
+}
+
+function getOffsetMillisecondsAtInstant(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  const rawParts = formatter.formatToParts(date);
+  const parts = {};
+  for (const part of rawParts) {
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  }
+
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+
+  return asUtc - date.getTime();
+}
+
+function zonedDateToUtcDate(year, month, day, hour, minute, timeZone) {
+  let guess = Date.UTC(year, month - 1, day, hour, minute, 0);
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const offset = getOffsetMillisecondsAtInstant(new Date(guess), timeZone);
+    const nextGuess = Date.UTC(year, month - 1, day, hour, minute, 0) - offset;
+    if (Math.abs(nextGuess - guess) < 1000) {
+      guess = nextGuess;
+      break;
+    }
+    guess = nextGuess;
+  }
+
+  return new Date(guess);
+}
+
+function slotBounds(dateParts, timeLabel) {
+  const [hourRaw, minuteRaw] = String(timeLabel).split(':');
+  const start = zonedDateToUtcDate(
+    dateParts.year,
+    dateParts.month,
+    dateParts.day,
+    Number(hourRaw),
+    Number(minuteRaw),
+    config.calendarTimezone,
+  );
+
+  const end = new Date(start.getTime() + (config.consultationDurationMinutes * 60000));
+  return {
+    start,
+    end,
+  };
+}
+
+async function fetchBusyIntervals(timeMin, timeMax) {
+  const accessToken = await getGoogleAccessToken();
+  const response = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      timeMin,
+      timeMax,
+      timeZone: config.calendarTimezone,
+      items: [
+        {
+          id: config.googleCalendarId,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Google freeBusy failed: ${response.status} ${text}`);
+  }
+
+  const payload = await response.json();
+  const busy = payload?.calendars?.[config.googleCalendarId]?.busy ?? [];
+  return busy.map((item) => ({
+    start: Date.parse(item.start),
+    end: Date.parse(item.end),
+  }));
+}
+
+function slotIsFree(slotStart, slotEnd, busyIntervals) {
+  return !busyIntervals.some((busy) => busy.start < slotEnd && busy.end > slotStart);
+}
+
+function buildLiveTimeOptions(dateParts, busyIntervals) {
+  if (!isInsideBookingWindow(dateParts) || !isConsultationDay(dateParts)) {
+    return baseTimeSlots().map((time) => ({
+      id: time,
+      title: time,
+      enabled: false,
+    }));
+  }
+
+  return baseTimeSlots().map((time) => {
+    const bounds = slotBounds(dateParts, time);
+    return {
+      id: time,
+      title: time,
+      enabled: slotIsFree(bounds.start.getTime(), bounds.end.getTime(), busyIntervals),
+    };
+  });
+}
+
+async function buildLiveDateOptions(monthId) {
+  const month = parseMonthId(monthId);
+  if (!month) return [];
+
+  const monthStart = zonedDateToUtcDate(month.year, month.month, 1, 0, 0, config.calendarTimezone);
+  const nextMonth = addMonths({ year: month.year, month: month.month, day: 1 }, 1);
+  const monthEnd = zonedDateToUtcDate(nextMonth.year, nextMonth.month, 1, 0, 0, config.calendarTimezone);
+  const busyIntervals = await fetchBusyIntervals(monthStart.toISOString(), monthEnd.toISOString());
+
+  const result = [];
+  const totalDays = daysInMonth(month.year, month.month);
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    const parts = { year: month.year, month: month.month, day };
+    let enabled = false;
+
+    if (isInsideBookingWindow(parts) && isConsultationDay(parts)) {
+      const slots = buildLiveTimeOptions(parts, busyIntervals);
+      enabled = slots.some((slot) => slot.enabled);
+    }
+
+    result.push(buildDateOption(parts, enabled));
+  }
+
+  return result;
+}
+
+async function buildLiveTimeOptionsForDate(dateId) {
+  const parts = parseYmd(dateId);
+  if (!parts) return [];
+
+  const dayStart = zonedDateToUtcDate(parts.year, parts.month, parts.day, 0, 0, config.calendarTimezone);
+  const nextDay = addDays(parts, 1);
+  const dayEnd = zonedDateToUtcDate(nextDay.year, nextDay.month, nextDay.day, 0, 0, config.calendarTimezone);
+  const busyIntervals = await fetchBusyIntervals(dayStart.toISOString(), dayEnd.toISOString());
+
+  return buildLiveTimeOptions(parts, busyIntervals);
 }
 
 export function listMonthOptions() {
@@ -164,46 +434,57 @@ export function listMonthOptions() {
   return result;
 }
 
-export function listDateOptions(monthId) {
-  const month = parseMonthId(monthId);
-  if (!month) return [];
-
-  const result = [];
-  const totalDays = daysInMonth(month.year, month.month);
-
-  for (let day = 1; day <= totalDays; day += 1) {
-    result.push(buildDateOption({
-      year: month.year,
-      month: month.month,
-      day,
-    }));
+export async function listDateOptions(monthId) {
+  if (!hasGoogleCalendarConfig()) {
+    return buildMockDateOptions(monthId);
   }
 
-  return result;
+  try {
+    return await buildLiveDateOptions(monthId);
+  } catch (error) {
+    console.error('[calendar] falling back to mock dates', error.message);
+    return buildMockDateOptions(monthId);
+  }
 }
 
-export function listTimeOptions(dateId) {
-  return buildTimeOptions(dateId);
+export async function listTimeOptions(dateId) {
+  if (!hasGoogleCalendarConfig()) {
+    return buildMockTimeOptions(dateId);
+  }
+
+  try {
+    return await buildLiveTimeOptionsForDate(dateId);
+  } catch (error) {
+    console.error('[calendar] falling back to mock times', error.message);
+    return buildMockTimeOptions(dateId);
+  }
 }
 
-export function buildAppointmentScreen({ selectedMonth = '', selectedDate = '' } = {}) {
+export async function buildAppointmentScreen({ selectedMonth = '', selectedDate = '' } = {}) {
+  const months = listMonthOptions();
+  const dates = selectedMonth ? await listDateOptions(selectedMonth) : [];
+  const times = selectedDate ? await listTimeOptions(selectedDate) : [];
+
   return {
     screen: 'APPOINTMENT',
     data: {
       studio_address: config.studioAddress,
-      month: listMonthOptions(),
-      date: selectedMonth ? listDateOptions(selectedMonth) : [],
+      month: months,
+      date: dates,
       is_date_enabled: Boolean(selectedMonth),
-      time: selectedDate ? listTimeOptions(selectedDate) : [],
+      time: times,
       is_time_enabled: Boolean(selectedDate),
     },
   };
 }
 
 export function buildSummaryPayload(payload) {
-  const dateTitleValue = listDateOptions(payload.month).find((item) => item.id === payload.date)?.title || payload.date;
+  const parsedDate = parseYmd(payload.date);
+  const dateLabel = parsedDate
+    ? dateTitle(parsedDate, config.calendarTimezone)
+    : payload.date;
 
-  const appointment = `Consultation at ${config.studioAddress}\n${dateTitleValue} at ${payload.time}.`;
+  const appointment = `Consultation at ${config.studioAddress}\n${dateLabel} at ${payload.time}.`;
   const details = [
     `Name: ${payload.name || ''}`,
     `Email: ${payload.email || ''}`,

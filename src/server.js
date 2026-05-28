@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
-import { config, hasEncryptionConfig } from './config.js';
+import { config, hasEncryptionConfig, hasGoogleCalendarConfig } from './config.js';
 import { decryptRequest, encryptResponse } from './encryption.js';
 import { getNextScreen } from './flow.js';
 
@@ -65,6 +65,7 @@ app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     encryption_ready: hasEncryptionConfig(),
+    google_calendar_ready: hasGoogleCalendarConfig(),
   });
 });
 
