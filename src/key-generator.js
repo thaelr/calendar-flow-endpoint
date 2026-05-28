@@ -3,7 +3,7 @@ import crypto from 'crypto';
 const passphrase = process.argv[2];
 
 if (!passphrase) {
-  console.error('Usage: npm run gen:keys -- "your-passphrase"');
+  console.error('Usage: node src/key-generator.js "your-passphrase"');
   process.exit(1);
 }
 
@@ -16,7 +16,7 @@ const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
   privateKeyEncoding: {
     type: 'pkcs8',
     format: 'pem',
-    cipher: 'des-ede3-cbc',
+    cipher: 'aes-256-cbc',
     passphrase,
   },
 });

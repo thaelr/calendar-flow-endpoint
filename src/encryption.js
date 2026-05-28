@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 
+const PEM_PRIVATE_KEY_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const PRIVATE_KEY_HEADER = '-----BEGIN PRIVATE KEY-----';
 const PRIVATE_KEY_FOOTER = '-----END PRIVATE KEY-----';
 
@@ -8,11 +9,15 @@ function formatPrivateKey(privateKey) {
     throw new Error('PRIVATE_KEY is empty');
   }
 
-  if (privateKey.includes(PRIVATE_KEY_HEADER)) {
-    return privateKey.replace(/\\n/g, '\n');
+  const normalized = privateKey
+    .replace(/^["']|["']$/g, '')
+    .replace(/\\n/g, '\n')
+    .trim();
+
+  if (PEM_PRIVATE_KEY_PATTERN.test(normalized)) {
+    return normalized;
   }
 
-  const normalized = privateKey.replace(/\\n/g, '\n').trim();
   return `${PRIVATE_KEY_HEADER}\n${normalized}\n${PRIVATE_KEY_FOOTER}`;
 }
 
