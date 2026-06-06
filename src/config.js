@@ -33,6 +33,8 @@ export const config = {
   appSecret: process.env.APP_SECRET?.trim() || '',
   privateKey: readMultilineSecret('PRIVATE_KEY'),
   passphrase: process.env.PASSPHRASE || '',
+  bookingCallbackUrl: process.env.BOOKING_CALLBACK_URL?.trim() || '',
+  bookingCallbackSecret: process.env.BOOKING_CALLBACK_SECRET?.trim() || '',
   studioAddress: process.env.STUDIO_ADDRESS?.trim() || DEFAULT_STUDIO_ADDRESS,
   calendarTimezone: process.env.CALENDAR_TIMEZONE?.trim() || DEFAULT_TIMEZONE,
   bookingHorizonDays: readInteger('BOOKING_HORIZON_DAYS', DEFAULT_BOOKING_HORIZON_DAYS),
@@ -57,4 +59,8 @@ export function hasGoogleCalendarConfig() {
     config.googlePrivateKey &&
     config.googleCalendarId,
   );
+}
+
+export function hasBookingCallbackConfig() {
+  return Boolean(config.bookingCallbackUrl);
 }

@@ -3,6 +3,7 @@ import {
   buildSummaryPayload,
   confirmConsultationBooking,
 } from './mock-calendar.js';
+import { sendBookedStatusCallback } from './booking-callback.js';
 
 function buildDetailsScreen(data = {}) {
   return {
@@ -101,6 +102,15 @@ export async function getNextScreen(payload) {
       email: data.email || null,
       phone: data.phone || null,
     });
+
+    if (bookingResult.status === 'booked') {
+      try {
+        const callbackResult = await sendBookedStatusCallback(data, bookingResult, flowToken);
+        console.log('[flow] booking callback result', callbackResult);
+      } catch (error) {
+        console.error('[flow] booking callback failed', error.message);
+      }
+    }
 
     if (bookingResult.status === 'slot_unavailable' && bookingResult.refreshedScreen) {
       return bookingResult.refreshedScreen;
