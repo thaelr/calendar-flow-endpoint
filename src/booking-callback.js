@@ -1,5 +1,23 @@
 import { config, hasBookingCallbackConfig } from './config.js';
 
+function parseFlowToken(flowToken) {
+  const normalized = String(flowToken || '').trim();
+  const match = /^waba-flow-(\d+)-(\d+)-(\d+)$/.exec(normalized);
+  if (!match) {
+    return {
+      chatwootConversationId: null,
+      sourceTurnNo: null,
+      issuedAtMs: null,
+    };
+  }
+
+  return {
+    chatwootConversationId: Number.parseInt(match[1], 10),
+    sourceTurnNo: Number.parseInt(match[2], 10),
+    issuedAtMs: Number.parseInt(match[3], 10),
+  };
+}
+
 function buildCallbackHeaders() {
   const headers = {
     'Content-Type': 'application/json',
@@ -20,12 +38,16 @@ export async function sendBookedStatusCallback(payload, bookingResult, flowToken
     };
   }
 
+  const parsedFlowToken = parseFlowToken(flowToken);
+
   const callbackPayload = {
     source: 'WhatsApp Flow',
     stage_key: 'consultation_booked',
     consultation_status: 'booked',
     booking_status: bookingResult?.status || 'unknown',
     flow_token: flowToken || '',
+    chatwoot_conversation_id: parsedFlowToken.chatwootConversationId,
+    source_turn_no: parsedFlowToken.sourceTurnNo,
     google_event_id: bookingResult?.eventId || '',
     google_event_link: bookingResult?.eventLink || '',
     studio_address: config.studioAddress,

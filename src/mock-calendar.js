@@ -123,7 +123,7 @@ function isInsideBookingWindow(parts) {
 
 function isConsultationDay(parts) {
   const weekday = weekdayIndex(parts);
-  return weekday >= 1 && weekday <= 5;
+  return weekday >= 2 && weekday <= 6;
 }
 
 function buildMonthOption(year, month) {
