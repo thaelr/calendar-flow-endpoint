@@ -1,4 +1,4 @@
-# Woof WhatsApp Flow Endpoint
+# Calendar WhatsApp Flow Endpoint
 
 ## What This Project Is
 
@@ -35,3 +35,7 @@ npm run dev
 The project requires `Meta WhatsApp Flow` configuration, encryption keys, and calendar settings.
 
 If `Google Calendar` is not connected, the flow can still run in test mode with mock time slots.
+
+---
+
+Part of a larger case study → [LeadFlow AI](https://github.com/thaelr/LeadFlowAI/tree/main) · [My site](https://thaelr.github.io/personal-site/)
